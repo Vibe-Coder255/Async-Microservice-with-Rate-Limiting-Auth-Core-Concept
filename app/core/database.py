@@ -44,3 +44,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         raise RuntimeError("Database engine is not initialized")
     async with SessionLocal() as session:
         yield session
+
+
+def get_db_context() -> AsyncSession:
+    if SessionLocal is None:
+        raise RuntimeError("Database engine is not initialized")
+    return SessionLocal()
