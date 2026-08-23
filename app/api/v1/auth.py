@@ -32,20 +32,10 @@ async def register(payload: UserCreate, session: AsyncSession = Depends(get_db))
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
-    if payload.role == UserRole.ADMIN:
-        admins = await session.execute(
-            select(User.id).where(User.role == UserRole.ADMIN).limit(1)
-        )
-        if admins.scalar_one_or_none() is not None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Admin registration is closed",
-            )
-
     user = User(
         email=payload.email,
         hashed_password=hash_password(payload.password),
-        role=payload.role,
+        role=UserRole.VIEWER,
     )
     session.add(user)
     await session.commit()

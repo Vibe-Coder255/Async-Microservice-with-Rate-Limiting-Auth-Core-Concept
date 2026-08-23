@@ -100,7 +100,7 @@ async def test_batch_ingest(client: AsyncClient):
 async def test_viewer_cannot_ingest(client: AsyncClient):
     register = await client.post(
         "/api/v1/auth/register",
-        json={"email": "viewer@local.dev", "password": "viewerpass", "role": "viewer"},
+        json={"email": "viewer@local.dev", "password": "viewerpass"},
     )
     assert register.status_code in {201, 409}
     token = await _login(client, "viewer@local.dev", "viewerpass")
@@ -113,12 +113,7 @@ async def test_viewer_cannot_ingest(client: AsyncClient):
 
 
 async def test_rate_limit_returns_429(client: AsyncClient):
-    register = await client.post(
-        "/api/v1/auth/register",
-        json={"email": "writer@local.dev", "password": "writerpass", "role": "ingest_writer"},
-    )
-    assert register.status_code in {201, 409}
-    token = await _login(client, "writer@local.dev", "writerpass")
+    token = await _login(client, "admin@local.dev", "adminadmin")
     headers = {"Authorization": f"Bearer {token}"}
     keys = await client.post(
         "/api/v1/auth/api-keys",
