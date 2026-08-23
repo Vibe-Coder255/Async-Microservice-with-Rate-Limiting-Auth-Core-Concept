@@ -65,7 +65,7 @@ async def _user_from_bearer(session: AsyncSession, token: str) -> Principal:
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive user")
 
-    scopes = payload.get("scopes") or ROLE_SCOPES[user.role.value]
+    scopes = ROLE_SCOPES[user.role.value]
     return Principal(
         user=user,
         api_key=None,
