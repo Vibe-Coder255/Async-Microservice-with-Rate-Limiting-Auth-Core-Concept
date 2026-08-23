@@ -166,3 +166,106 @@ async def test_viewer_cannot_create_api_keys(client: AsyncClient):
         json={"name": "blocked", "rate_limit_tier": "free"},
     )
     assert response.status_code == 403
+
+
+def _make_batch_events(count: int) -> list[dict]:
+    return [
+        {"event_type": "batch.item", "payload": {"i": i}}
+        for i in range(count)
+    ]
+
+
+async def test_batch_charges_tokens_proportional_to_size(client: AsyncClient):
+    token = await _login(client, "admin@local.dev", "adminadmin")
+    headers = {"Authorization": f"Bearer {token}"}
+    keys = await client.post(
+        "/api/v1/auth/api-keys",
+        headers=headers,
+        json={"name": "batch-proportional", "rate_limit_tier": "free"},
+    )
+    assert keys.status_code == 201, keys.text
+    api_key = keys.json()["api_key"]
+    api_headers = {"X-API-Key": api_key}
+
+    size = 5
+    response = await client.post(
+        "/api/v1/events/batch",
+        headers=api_headers,
+        json={"events": _make_batch_events(size)},
+    )
+    assert response.status_code == 200, response.text
+    remaining = int(response.headers["X-RateLimit-Remaining"])
+    assert remaining == 10 - size, f"Expected {10-size} remaining after 5-event batch, got {remaining}"
+    body = response.json()
+    assert body["accepted"] == size
+    assert len(body["event_ids"]) == size
+
+
+async def test_free_tier_10_event_batch_succeeds(client: AsyncClient):
+    token = await _login(client, "admin@local.dev", "adminadmin")
+    headers = {"Authorization": f"Bearer {token}"}
+    keys = await client.post(
+        "/api/v1/auth/api-keys",
+        headers=headers,
+        json={"name": "batch-free-10", "rate_limit_tier": "free"},
+    )
+    assert keys.status_code == 201, keys.text
+    api_key = keys.json()["api_key"]
+    api_headers = {"X-API-Key": api_key}
+
+    response = await client.post(
+        "/api/v1/events/batch",
+        headers=api_headers,
+        json={"events": _make_batch_events(10)},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["accepted"] == 10
+    remaining = int(response.headers["X-RateLimit-Remaining"])
+    assert remaining == 0
+
+
+async def test_free_tier_11_event_batch_returns_429(client: AsyncClient):
+    token = await _login(client, "admin@local.dev", "adminadmin")
+    headers = {"Authorization": f"Bearer {token}"}
+    keys = await client.post(
+        "/api/v1/auth/api-keys",
+        headers=headers,
+        json={"name": "batch-free-11", "rate_limit_tier": "free"},
+    )
+    assert keys.status_code == 201, keys.text
+    api_key = keys.json()["api_key"]
+    api_headers = {"X-API-Key": api_key}
+
+    response = await client.post(
+        "/api/v1/events/batch",
+        headers=api_headers,
+        json={"events": _make_batch_events(11)},
+    )
+    assert response.status_code == 429, response.text
+    assert "X-RateLimit-Limit" in response.headers
+    assert "X-RateLimit-Reset" in response.headers
+    assert "Retry-After" in response.headers
+    assert "exceeds tier capacity" in response.json()["detail"]
+
+
+async def test_single_event_cost_unchanged_after_fix(client: AsyncClient):
+    token = await _login(client, "admin@local.dev", "adminadmin")
+    headers = {"Authorization": f"Bearer {token}"}
+    keys = await client.post(
+        "/api/v1/auth/api-keys",
+        headers=headers,
+        json={"name": "single-unchanged", "rate_limit_tier": "free"},
+    )
+    assert keys.status_code == 201, keys.text
+    api_key = keys.json()["api_key"]
+    api_headers = {"X-API-Key": api_key}
+
+    response = await client.post(
+        "/api/v1/events",
+        headers=api_headers,
+        json={"event_type": "single", "payload": {}},
+    )
+    assert response.status_code == 200, response.text
+    remaining = int(response.headers["X-RateLimit-Remaining"])
+    assert remaining == 9

@@ -110,6 +110,52 @@ def require_scopes(*required: str):
     return checker
 
 
+async def consume_rate_limit(
+    request: Request,
+    response: Response,
+    principal: Principal,
+    cost: int,
+) -> Principal:
+    if cost < 1:
+        cost = 1
+    limiter: TokenBucketLimiter = request.app.state.limiter
+    params = tier_params(principal.rate_limit_tier)
+    capacity = params["capacity"]
+    if cost > capacity:
+        reset_epoch = int(time.time() + max(1, (cost - capacity) / max(params["refill_rate"], 0.0001)))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Batch size {cost} exceeds tier capacity of {int(capacity)}",
+            headers={
+                "Retry-After": str(max(1, reset_epoch - int(time.time()))),
+                "X-RateLimit-Limit": str(int(capacity)),
+                "X-RateLimit-Remaining": str(0),
+                "X-RateLimit-Reset": str(reset_epoch),
+            },
+        )
+    allowed, remaining, reset_epoch = await limiter.consume(
+        key=principal.rate_limit_key,
+        capacity=capacity,
+        refill_rate=params["refill_rate"],
+        cost=cost,
+    )
+    response.headers["X-RateLimit-Limit"] = str(int(capacity))
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    response.headers["X-RateLimit-Reset"] = str(reset_epoch)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded",
+            headers={
+                "Retry-After": str(max(1, reset_epoch - int(time.time()))),
+                "X-RateLimit-Limit": str(int(capacity)),
+                "X-RateLimit-Remaining": str(remaining),
+                "X-RateLimit-Reset": str(reset_epoch),
+            },
+        )
+    return principal
+
+
 class RateLimiter:
     """FastAPI dependency that consumes tokens from the Redis token bucket."""
 
@@ -122,26 +168,4 @@ class RateLimiter:
         response: Response,
         principal: Principal = Depends(get_current_principal),
     ) -> Principal:
-        limiter: TokenBucketLimiter = request.app.state.limiter
-        params = tier_params(principal.rate_limit_tier)
-        allowed, remaining, reset_epoch = await limiter.consume(
-            key=principal.rate_limit_key,
-            capacity=params["capacity"],
-            refill_rate=params["refill_rate"],
-            cost=self.cost,
-        )
-        response.headers["X-RateLimit-Limit"] = str(int(params["capacity"]))
-        response.headers["X-RateLimit-Remaining"] = str(remaining)
-        response.headers["X-RateLimit-Reset"] = str(reset_epoch)
-        if not allowed:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Rate limit exceeded",
-                headers={
-                    "Retry-After": str(max(1, reset_epoch - int(time.time()))),
-                    "X-RateLimit-Limit": str(int(params["capacity"])),
-                    "X-RateLimit-Remaining": str(remaining),
-                    "X-RateLimit-Reset": str(reset_epoch),
-                },
-            )
-        return principal
+        return await consume_rate_limit(request, response, principal, self.cost)

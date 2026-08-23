@@ -1,7 +1,13 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import Principal, RateLimiter, get_db, require_scopes
+from app.api.deps import (
+    Principal,
+    RateLimiter,
+    consume_rate_limit,
+    get_db,
+    require_scopes,
+)
 from app.core.redis import get_redis
 from app.models.user import UserRole
 from app.schemas.event import EventBatchCreate, EventBatchResult, EventCreate, EventRead
@@ -39,13 +45,16 @@ async def create_event(
 @router.post(
     "/batch",
     response_model=EventBatchResult,
-    dependencies=[Depends(require_scopes("ingest_writer"))],
 )
 async def create_event_batch(
     body: EventBatchCreate,
+    request: Request,
+    response: Response,
     session: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(RateLimiter(cost=1)),
+    principal: Principal = Depends(require_scopes("ingest_writer")),
 ) -> EventBatchResult:
+    cost = len(body.events)
+    principal = await consume_rate_limit(request, response, principal, cost)
     ids = await ingest_events(session, principal.user.id, body.events)
     messages = [
         _broadcast_payload(str(principal.user.id), str(event_id), event)
