@@ -54,7 +54,7 @@
 
 
 ```
-** Solution:**
+** Solution: **
 
 I'll help you fix this security vulnerability. Let me start by exploring the codebase to understand the project structure and locate the relevant files.
 Let me understand the task:
