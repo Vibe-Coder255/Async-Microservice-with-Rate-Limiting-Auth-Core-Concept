@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import Principal, get_current_principal, require_scopes
 from app.core.database import get_db
 from app.core.security import (
+    ROLE_ALLOWED_TIERS,
     ROLE_SCOPES,
     create_access_token,
     hash_password,
@@ -70,6 +71,13 @@ async def create_api_key(
     session: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require_scopes("ingest_writer")),
 ) -> APIKeyCreated:
+    allowed_tiers = ROLE_ALLOWED_TIERS.get(principal.user.role.value, set())
+    if payload.rate_limit_tier not in allowed_tiers:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Role '{principal.user.role.value}' cannot create {payload.rate_limit_tier} tier API keys",
+        )
+
     raw_key = generate_api_key()
     record = APIKey(
         name=payload.name,

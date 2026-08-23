@@ -136,3 +136,33 @@ async def test_rate_limit_returns_429(client: AsyncClient):
             assert "X-RateLimit-Remaining" in response.headers
             break
     assert 429 in statuses
+
+
+async def test_admin_can_create_premium_api_key(client: AsyncClient):
+    token = await _login(client, "admin@local.dev", "adminadmin")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = await client.post(
+        "/api/v1/auth/api-keys",
+        headers=headers,
+        json={"name": "premium-key", "rate_limit_tier": "premium"},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["rate_limit_tier"] == "premium"
+    assert "api_key" in body
+
+
+async def test_viewer_cannot_create_api_keys(client: AsyncClient):
+    register = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "viewer_nokey@local.dev", "password": "viewerpass"},
+    )
+    assert register.status_code in {201, 409}
+    token = await _login(client, "viewer_nokey@local.dev", "viewerpass")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = await client.post(
+        "/api/v1/auth/api-keys",
+        headers=headers,
+        json={"name": "blocked", "rate_limit_tier": "free"},
+    )
+    assert response.status_code == 403

@@ -1,7 +1,15 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.core.security import create_access_token, decode_token, hash_password, verify_password
+from app.core.security import (
+    ROLE_ALLOWED_TIERS,
+    ROLE_SCOPES,
+    create_access_token,
+    decode_token,
+    hash_password,
+    verify_password,
+)
+from app.models.user import UserRole
 from app.services.rate_limiter import generate_api_key, hash_api_key
 
 
@@ -32,3 +40,27 @@ def test_api_key_hash_is_sha256_hex():
     assert len(digest) == 64
     assert hash_api_key(raw) == digest
     assert hash_api_key(raw + "x") != digest
+
+
+def test_role_allowed_tiers_policy():
+    assert ROLE_ALLOWED_TIERS[UserRole.ADMIN.value] == {"free", "standard", "premium"}
+    assert ROLE_ALLOWED_TIERS[UserRole.INGEST_WRITER.value] == {"free", "standard"}
+    assert ROLE_ALLOWED_TIERS[UserRole.VIEWER.value] == set()
+
+
+def test_ingest_writer_cannot_have_premium_tier():
+    allowed = ROLE_ALLOWED_TIERS[UserRole.INGEST_WRITER.value]
+    assert "premium" not in allowed
+    assert "free" in allowed
+    assert "standard" in allowed
+
+
+def test_admin_can_have_all_tiers():
+    allowed = ROLE_ALLOWED_TIERS[UserRole.ADMIN.value]
+    assert "free" in allowed
+    assert "standard" in allowed
+    assert "premium" in allowed
+
+
+def test_viewer_cannot_have_any_api_key_tier():
+    assert ROLE_ALLOWED_TIERS[UserRole.VIEWER.value] == set()

@@ -21,6 +21,12 @@ ROLE_TIER: dict[str, str] = {
     UserRole.VIEWER.value: "free",
 }
 
+ROLE_ALLOWED_TIERS: dict[str, set[str]] = {
+    UserRole.ADMIN.value: {"free", "standard", "premium"},
+    UserRole.INGEST_WRITER.value: {"free", "standard"},
+    UserRole.VIEWER.value: set(),
+}
+
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
