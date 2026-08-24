@@ -15,8 +15,20 @@ from app.services.outbox import outbox_worker
 from app.services.rate_limiter import TokenBucketLimiter
 
 
+def _check_production_safety() -> None:
+    if settings.debug:
+        return
+    if settings.secret_key == "change-me-to-a-long-random-string":
+        raise RuntimeError("Production secret key is not configured")
+    if settings.seed_admin_password == "adminadmin":
+        raise RuntimeError("Production seed admin password is not configured")
+    if settings.seed_admin_email == "admin@local.dev":
+        raise RuntimeError("Production seed admin email is not configured")
+
+
 async def _seed_admin() -> None:
-    if not settings.seed_admin or SessionLocal is None:
+    should_seed = settings.seed_admin if settings.seed_admin is not None else settings.debug
+    if not should_seed or SessionLocal is None:
         return
     async with SessionLocal() as session:
         result = await session.execute(select(User).where(User.email == settings.seed_admin_email))
@@ -34,6 +46,7 @@ async def _seed_admin() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _check_production_safety()
     init_engine()
     redis = await init_redis()
     limiter = TokenBucketLimiter(redis)

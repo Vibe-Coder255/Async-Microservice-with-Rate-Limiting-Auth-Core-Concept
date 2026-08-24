@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
-    seed_admin: bool = True
+    seed_admin: bool | None = None
     seed_admin_email: str = "admin@local.dev"
     seed_admin_password: str = "adminadmin"
 
