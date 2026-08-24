@@ -1,13 +1,13 @@
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from sqlalchemy import select
+from fastapi import FastAPI, Response, status
+from sqlalchemy import select, text
 
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.core.database import SessionLocal, dispose_engine, init_engine
-from app.core.redis import close_redis, init_redis
+from app.core.database import SessionLocal, dispose_engine, get_db_context, init_engine
+from app.core.redis import close_redis, get_redis, init_redis
 from app.core.security import hash_password
 from app.models import APIKey, EventLog, Outbox  # noqa: F401
 from app.models.user import User, UserRole
@@ -71,3 +71,18 @@ app.include_router(api_router, prefix="/api/v1")
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def health_ready(response: Response) -> dict[str, str]:
+    try:
+        async with get_db_context() as session:
+            await session.execute(text("SELECT 1"))
+        
+        redis = get_redis()
+        await redis.ping()
+        
+        return {"status": "ready"}
+    except Exception as e:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "error", "details": str(e)}
