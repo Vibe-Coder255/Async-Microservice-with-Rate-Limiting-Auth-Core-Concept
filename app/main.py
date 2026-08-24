@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,8 +9,9 @@ from app.core.config import settings
 from app.core.database import SessionLocal, dispose_engine, init_engine
 from app.core.redis import close_redis, init_redis
 from app.core.security import hash_password
-from app.models import APIKey, EventLog  # noqa: F401
+from app.models import APIKey, EventLog, Outbox  # noqa: F401
 from app.models.user import User, UserRole
+from app.services.outbox import outbox_worker
 from app.services.rate_limiter import TokenBucketLimiter
 
 
@@ -38,9 +40,21 @@ async def lifespan(app: FastAPI):
     await limiter.load_script()
     app.state.limiter = limiter
     await _seed_admin()
-    yield
-    await close_redis()
-    await dispose_engine()
+
+    outbox_stop = asyncio.Event()
+    outbox_task = asyncio.create_task(outbox_worker(outbox_stop))
+
+    try:
+        yield
+    finally:
+        outbox_stop.set()
+        outbox_task.cancel()
+        try:
+            await outbox_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        await close_redis()
+        await dispose_engine()
 
 
 app = FastAPI(
@@ -48,7 +62,7 @@ app = FastAPI(
     lifespan=lifespan,
     description=(
         "Async event ingestion service with JWT/RBAC, atomic Redis token-bucket "
-        "rate limiting, and Redis Pub/Sub WebSocket fan-out."
+        "rate limiting, transactional outbox for reliable Redis Pub/Sub fan-out."
     ),
 )
 app.include_router(api_router, prefix="/api/v1")

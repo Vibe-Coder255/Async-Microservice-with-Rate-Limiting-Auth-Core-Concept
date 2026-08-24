@@ -8,38 +8,30 @@ from app.api.deps import (
     get_db,
     require_scopes,
 )
-from app.core.redis import get_redis
 from app.models.user import UserRole
 from app.schemas.event import EventBatchCreate, EventBatchResult, EventCreate, EventRead
 from app.services.events import ingest_events, list_events
-from app.services.rate_limiter import publish_events
 
-router = APIRouter(prefix="/events", tags=["events"])
-
-
-def _broadcast_payload(user_id: str, event_id: str, event: EventCreate) -> dict:
-    return {
-        "id": event_id,
-        "user_id": user_id,
-        "event_type": event.event_type,
-        "payload": event.payload,
-    }
+router = APIRouter(tags=["events"])
 
 
-@router.post("", response_model=EventRead, dependencies=[Depends(require_scopes("ingest_writer"))])
+@router.post(
+    "",
+    response_model=EventRead,
+    dependencies=[Depends(require_scopes("ingest_writer"))],
+)
 async def create_event(
     body: EventCreate,
     session: AsyncSession = Depends(get_db),
     principal: Principal = Depends(RateLimiter(cost=1)),
 ) -> EventRead:
-    ids = await ingest_events(session, principal.user.id, [body])
-    event_id = ids[0]
-    await publish_events(
-        get_redis(),
-        [_broadcast_payload(str(principal.user.id), str(event_id), body)],
+    [event_id] = await ingest_events(session, principal.user.id, [body])
+    return EventRead(
+        id=event_id,
+        user_id=principal.user.id,
+        event_type=body.event_type,
+        payload=body.payload,
     )
-    rows = await list_events(session, user_id=principal.user.id, limit=1)
-    return rows[0]
 
 
 @router.post(
@@ -56,19 +48,24 @@ async def create_event_batch(
     cost = len(body.events)
     principal = await consume_rate_limit(request, response, principal, cost)
     ids = await ingest_events(session, principal.user.id, body.events)
-    messages = [
-        _broadcast_payload(str(principal.user.id), str(event_id), event)
-        for event_id, event in zip(ids, body.events, strict=True)
-    ]
-    await publish_events(get_redis(), messages)
     return EventBatchResult(accepted=len(ids), event_ids=ids)
 
 
-@router.get("", response_model=list[EventRead], dependencies=[Depends(require_scopes("viewer"))])
-async def get_events(
-    session: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(RateLimiter(cost=1)),
+@router.get("", response_model=list[EventRead])
+async def list_events_view(
     limit: int = Query(default=50, ge=1, le=500),
+    session: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require_scopes("viewer")),
 ) -> list[EventRead]:
     user_id = None if principal.user.role == UserRole.ADMIN else principal.user.id
-    return await list_events(session, user_id=user_id, limit=limit)
+    rows = await list_events(session, user_id=user_id, limit=limit)
+    return [
+        EventRead(
+            id=row.id,
+            user_id=row.user_id,
+            event_type=row.event_type,
+            payload=row.payload,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]

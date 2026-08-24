@@ -269,3 +269,70 @@ async def test_single_event_cost_unchanged_after_fix(client: AsyncClient):
     assert response.status_code == 200, response.text
     remaining = int(response.headers["X-RateLimit-Remaining"])
     assert remaining == 9
+
+
+@pytest.fixture
+def _db_session():
+    from app.core.database import get_db_context
+
+    return get_db_context
+
+
+async def test_event_ingestion_writes_pending_outbox_row(client: AsyncClient):
+    from sqlalchemy import select
+
+    from app.core.database import get_db_context
+    from app.models.outbox import Outbox
+
+    token = await _login(client, "admin@local.dev", "adminadmin")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = await client.post(
+        "/api/v1/events",
+        headers=headers,
+        json={"event_type": "outbox_check", "payload": {"k": "v"}},
+    )
+    assert response.status_code == 200, response.text
+    event_id = response.json()["id"]
+
+    async with get_db_context() as session:
+        row = (await session.execute(select(Outbox).where(Outbox.event_id == event_id))).scalar_one_or_none()
+    assert row is not None, "Outbox row must exist after event ingestion"
+    assert str(row.event_id) == event_id
+    assert row.event_type == "outbox_check"
+    assert row.payload == {"k": "v"}
+    assert row.status == "pending"
+    assert row.attempt_count == 0
+
+
+async def test_batch_ingestion_writes_outbox_per_event(client: AsyncClient):
+    from sqlalchemy import func, select
+
+    from app.core.database import get_db_context
+    from app.models.outbox import Outbox
+
+    token = await _login(client, "admin@local.dev", "adminadmin")
+    headers = {"Authorization": f"Bearer {token}"}
+    keys = await client.post(
+        "/api/v1/auth/api-keys",
+        headers=headers,
+        json={"name": "batch-outbox", "rate_limit_tier": "standard"},
+    )
+    api_key = keys.json()["api_key"]
+    api_headers = {"X-API-Key": api_key}
+
+    n = 4
+    response = await client.post(
+        "/api/v1/events/batch",
+        headers=api_headers,
+        json={"events": [{"event_type": f"b{i}", "payload": {}} for i in range(n)]},
+    )
+    assert response.status_code == 200, response.text
+    ids = response.json()["event_ids"]
+    assert len(ids) == n
+
+    async with get_db_context() as session:
+        count = (await session.execute(select(func.count()).select_from(Outbox).where(Outbox.event_id.in_(ids)))).scalar_one()
+        rows = (await session.execute(select(Outbox).where(Outbox.event_id.in_(ids)))).scalars().all()
+    assert count == n
+    assert all(r.status == "pending" for r in rows)
+    assert {r.event_type for r in rows} == {f"b{i}" for i in range(n)}

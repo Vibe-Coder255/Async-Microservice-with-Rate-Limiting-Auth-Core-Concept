@@ -5,6 +5,7 @@ from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.event import EventLog
+from app.models.outbox import Outbox
 from app.schemas.event import EventCreate
 
 
@@ -13,20 +14,35 @@ async def ingest_events(
     user_id: uuid.UUID,
     events: list[EventCreate],
 ) -> list[uuid.UUID]:
-    rows: list[dict[str, Any]] = []
+    event_rows: list[dict[str, Any]] = []
+    outbox_rows: list[dict[str, Any]] = []
     ids: list[uuid.UUID] = []
     for event in events:
         event_id = uuid.uuid4()
         ids.append(event_id)
-        rows.append(
+        row = {
+            "id": event_id,
+            "user_id": user_id,
+            "event_type": event.event_type,
+            "payload": event.payload,
+        }
+        event_rows.append(row)
+        outbox_rows.append(
             {
-                "id": event_id,
+                "id": uuid.uuid4(),
+                "event_id": event_id,
                 "user_id": user_id,
                 "event_type": event.event_type,
                 "payload": event.payload,
+                "status": "pending",
+                "attempt_count": 0,
+                "last_error": None,
             }
         )
-    await session.execute(insert(EventLog), rows)
+    if event_rows:
+        await session.execute(insert(EventLog), event_rows)
+    if outbox_rows:
+        await session.execute(insert(Outbox), outbox_rows)
     await session.commit()
     return ids
 
