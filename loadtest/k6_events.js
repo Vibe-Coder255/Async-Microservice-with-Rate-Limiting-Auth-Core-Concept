@@ -30,7 +30,10 @@ export default function (data) {
   const res = http.post(
     `${BASE}/api/v1/events`,
     JSON.stringify({ event_type: "load.ping", payload: { src: "k6" } }),
-    { headers }
+    { 
+      headers,
+      responseCallback: http.expectedStatuses(200, 429),
+    }
   );
   check(res, {
     "accepted or rate-limited": (r) => r.status === 200 || r.status === 429,
